@@ -15,6 +15,9 @@ other services that accept HTTP requests.
 - A primary health route with an optional fallback route.
 - Configurable timeouts and retry attempts.
 - A readable status page at the Worker root URL.
+- A manual check form for testing an additional site immediately.
+- Persistent add/remove controls for monitored sites.
+- Per-site ping, success, failure, and last-check counters.
 - JSON output for scripts and monitoring tools.
 - No accounts, dashboard database, or application data files.
 
@@ -63,6 +66,8 @@ curl https://<your-worker-domain>/ping
 | Route | Methods | Response |
 | --- | --- | --- |
 | `/` or `/status` | `GET` | Small HTML status page |
+| `/check` | `POST` | Manual site check from the status page |
+| `/sites` | `POST` | Add or remove a persisted monitored site |
 | `/ping` | `GET`, `POST` | Result of an immediate check |
 | `/debug` | `GET` | Current settings and recent results |
 
@@ -99,6 +104,46 @@ For a service with a dedicated health route, change the paths:
 HEALTH_ENDPOINT = "/health"
 FALLBACK_ENDPOINT = "/"
 ```
+
+## Manual site checks
+
+Open the Worker URL and use **Check another site manually** to test a URL
+without changing `TARGET_URL`. The result is displayed immediately, but the
+site is not added to the scheduled list and will not be checked again by the
+cron job. For scripts, the same feature is available with:
+
+```text
+/ping?target=https://example.com
+```
+
+Manual targets support the same public HTTP/HTTPS validation as configured
+targets.
+
+## Persistent site management
+
+Create a KV namespace and bind it to `KEEPALIVE_DATA`:
+
+```bash
+npx wrangler kv namespace create KEEPALIVE_DATA
+```
+
+Add the returned namespace ID to `wrangler.toml`:
+
+```toml
+[[kv_namespaces]]
+binding = "KEEPALIVE_DATA"
+id = "YOUR_NAMESPACE_ID"
+```
+
+Create an admin token before using the HTML add/remove controls:
+
+```bash
+npx wrangler secret put ADMIN_TOKEN
+```
+
+Enter that token in the site-management form. The initial monitored list
+comes from `TARGET_URL`. Later edits are stored in KV and survive Worker
+restarts.
 
 ## Local development
 
