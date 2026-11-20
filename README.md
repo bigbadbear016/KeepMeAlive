@@ -135,15 +135,9 @@ binding = "KEEPALIVE_DATA"
 id = "YOUR_NAMESPACE_ID"
 ```
 
-Create an admin token before using the HTML add/remove controls:
-
-```bash
-npx wrangler secret put ADMIN_TOKEN
-```
-
-Enter that token in the site-management form. The initial monitored list
-comes from `TARGET_URL`. Later edits are stored in KV and survive Worker
-restarts.
+The HTML add/remove controls do not require an admin token. The initial
+monitored list comes from `TARGET_URL`. Later edits are stored in KV and
+survive Worker restarts.
 
 ## Local development
 

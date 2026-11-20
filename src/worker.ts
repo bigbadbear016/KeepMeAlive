@@ -6,7 +6,6 @@ export interface Env {
   RETRY_ATTEMPTS?: string;
   ENABLE_FALLBACK?: string;
   KEEPALIVE_DATA?: KVNamespace;
-  ADMIN_TOKEN?: string;
 }
 
 interface PingResult {
@@ -317,7 +316,7 @@ header.top { display: flex; align-items: center; justify-content: space-between;
 .empty-state .big { font-size: 2rem; }
 form { margin: 0; }
 .field { display: flex; gap: 10px; flex-wrap: wrap; }
-input[type=url], input[type=password] { flex: 1; min-width: 160px; padding: 11px 14px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font: inherit; font-size: .9rem; }
+input[type=url] { flex: 1; min-width: 160px; padding: 11px 14px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font: inherit; font-size: .9rem; }
 input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 button { border: 0; border-radius: 10px; padding: 11px 18px; background: var(--accent); color: var(--accent-text); font: inherit; font-size: .9rem; font-weight: 700; cursor: pointer; white-space: nowrap; transition: transform .1s, opacity .15s; }
 button:hover { opacity: .9; } button:active { transform: scale(.98); }
@@ -329,9 +328,6 @@ button.ghost:hover { color: var(--bad); border-color: var(--bad); opacity: 1; }
 .results li { display: grid; gap: 2px; padding: 10px 14px; border-radius: 10px; border-left: 4px solid var(--ok); background: var(--ok-bg); }
 .results li.bad { border-left-color: var(--bad); background: var(--bad-bg); }
 .results strong { font-size: .88rem; overflow-wrap: anywhere; } .results small { color: var(--muted); }
-details.admin summary { cursor: pointer; color: var(--muted); font-size: .85rem; font-weight: 600; list-style: none; }
-details.admin summary::before { content: "🔑  "; }
-details.admin[open] summary { margin-bottom: 12px; }
 footer { display: flex; justify-content: center; gap: 18px; color: var(--muted); font-size: .85rem; flex-wrap: wrap; }
 footer a { color: var(--accent); text-decoration: none; font-weight: 600; } footer a:hover { text-decoration: underline; }
 @media (max-width: 720px) { .stats { grid-template-columns: repeat(2, 1fr); } .two { grid-template-columns: 1fr; } }
@@ -352,14 +348,6 @@ const PAGE_JS = `
     document.querySelectorAll('[data-time]').forEach(function (el) { el.textContent = rel(el.getAttribute('data-time')); });
   }
   tick(); setInterval(tick, 15000);
-  document.querySelectorAll('form[data-remove]').forEach(function (f) {
-    f.addEventListener('submit', function (e) {
-      var shared = document.getElementById('admin-token');
-      var token = shared && shared.value ? shared.value : window.prompt('Admin token to remove this site:');
-      if (!token) { e.preventDefault(); return; }
-      f.querySelector('input[name=token]').value = token;
-    });
-  });
 })();
 `;
 
@@ -409,10 +397,9 @@ async function statusPage(env: Env, manualResult?: PingResult): Promise<Response
         <span>${stats.lastChecked ? `Checked <span data-time="${escapeHtml(stats.lastChecked)}">${escapeHtml(stats.lastChecked)}</span>` : 'Not checked'}</span>
       </div>
       <div class="site-actions">
-        <form method="post" action="/sites" data-remove>
+        <form method="post" action="/sites">
           <input type="hidden" name="action" value="remove">
           <input type="hidden" name="target" value="${escapeHtml(stats.target)}">
-          <input type="hidden" name="token" value="">
           <button type="submit" class="ghost">Remove</button>
         </form>
       </div>
@@ -467,11 +454,10 @@ async function statusPage(env: Env, manualResult?: PingResult): Promise<Response
           <input type="hidden" name="action" value="add">
           <div class="field">
             <input type="url" name="target" placeholder="https://your-site.example.com" required>
-            <input type="password" id="admin-token" name="token" placeholder="Admin token" autocomplete="off" required>
           </div>
           <div class="field" style="margin-top:10px"><button type="submit">Add site</button></div>
         </form>
-        <p class="hint">The admin token is also used when removing a site.</p>
+        <p class="hint">Sites are saved with the Worker’s KV storage.</p>
       </section>
 
       <section class="card">
@@ -516,15 +502,7 @@ export default {
       if (!env.KEEPALIVE_DATA) {
         return jsonResponse({ success: false, error: 'KEEPALIVE_DATA KV binding is not configured' }, 503);
       }
-      if (!env.ADMIN_TOKEN) {
-        return jsonResponse({ success: false, error: 'ADMIN_TOKEN is not configured' }, 503);
-      }
       const form = await request.formData();
-      const token = String(form.get('token') ?? '');
-      if (token !== env.ADMIN_TOKEN) {
-        return jsonResponse({ success: false, error: 'Invalid admin token' }, 401);
-      }
-
       const action = String(form.get('action') ?? '');
       const rawTarget = String(form.get('target') ?? '');
       if (action !== 'add' && action !== 'remove') {
