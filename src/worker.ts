@@ -40,6 +40,8 @@ interface TargetStats {
 const history: PingResult[] = [];
 let lastPing: PingResult | null = null;
 const MAX_HISTORY = 20;
+const STATUS_KEY = 'configuration:status';
+const HISTORY_KEY = 'configuration:history';
 
 function jsonResponse(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data, null, 2), {
@@ -101,6 +103,43 @@ async function configuredUrls(env: Env): Promise<URL[]> {
 
 async function saveSites(env: Env, urls: URL[]): Promise<void> {
   await env.KEEPALIVE_DATA?.put(SITES_KEY, JSON.stringify(urls.map(url => url.href)));
+}
+
+async function restoreStatus(env: Env): Promise<void> {
+  if (!env.KEEPALIVE_DATA) return;
+
+  if (!lastPing) {
+    const storedStatus = await env.KEEPALIVE_DATA.get(STATUS_KEY);
+    if (storedStatus) {
+      try {
+        lastPing = JSON.parse(storedStatus) as PingResult;
+      } catch {
+        lastPing = null;
+      }
+    }
+  }
+
+  if (history.length === 0) {
+    const storedHistory = await env.KEEPALIVE_DATA.get(HISTORY_KEY);
+    if (storedHistory) {
+      try {
+        const stored = JSON.parse(storedHistory);
+        if (Array.isArray(stored)) {
+          history.push(...stored.slice(0, MAX_HISTORY));
+        }
+      } catch {
+        history.splice(0);
+      }
+    }
+  }
+}
+
+async function persistStatus(env: Env, result: PingResult): Promise<void> {
+  if (!env.KEEPALIVE_DATA) return;
+  await Promise.all([
+    env.KEEPALIVE_DATA.put(STATUS_KEY, JSON.stringify(result)),
+    env.KEEPALIVE_DATA.put(HISTORY_KEY, JSON.stringify(history)),
+  ]);
 }
 
 async function readStats(env: Env, target: string): Promise<TargetStats> {
@@ -195,7 +234,7 @@ async function executePing(
       targets: [],
       error: 'TARGET_URL must contain at least one valid HTTP or HTTPS URL',
     };
-    return persist ? record(result) : result;
+    return persist ? await record(env, result) : result;
   }
 
   const primary = env.HEALTH_ENDPOINT || '/';
@@ -237,14 +276,17 @@ async function executePing(
       ? { error: 'One or more targets could not be reached' }
       : {}),
   };
-  if (persist) await updateStats(env, results, result.timestamp);
-  return persist ? record(result) : result;
+  if (persist) {
+    await updateStats(env, results, result.timestamp);
+  }
+  return persist ? await record(env, result) : result;
 }
 
-function record(result: PingResult): PingResult {
+async function record(env: Env, result: PingResult): Promise<PingResult> {
   lastPing = result;
   history.unshift(result);
   history.splice(MAX_HISTORY);
+  await persistStatus(env, result);
   return result;
 }
 
@@ -335,14 +377,16 @@ footer a { color: var(--accent); text-decoration: none; font-weight: 600; } foot
 
 const PAGE_JS = `
 (function () {
-  var rtf = typeof Intl !== 'undefined' && Intl.RelativeTimeFormat ? new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' }) : null;
   function rel(iso) {
-    var s = Math.round((new Date(iso).getTime() - Date.now()) / 1000), a = Math.abs(s);
-    if (!rtf) return new Date(iso).toLocaleString();
-    if (a < 60) return rtf.format(s, 'second');
-    if (a < 3600) return rtf.format(Math.round(s / 60), 'minute');
-    if (a < 86400) return rtf.format(Math.round(s / 3600), 'hour');
-    return rtf.format(Math.round(s / 86400), 'day');
+    var elapsed = Math.max(0, Date.now() - new Date(iso).getTime());
+    var seconds = Math.floor(elapsed / 1000);
+    if (seconds < 60) return 'just now';
+    var minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return minutes + ' minute' + (minutes === 1 ? '' : 's') + ' ago';
+    var hours = Math.floor(minutes / 60);
+    if (hours < 24) return hours + ' hour' + (hours === 1 ? '' : 's') + ' ago';
+    var days = Math.floor(hours / 24);
+    return days + ' day' + (days === 1 ? '' : 's') + ' ago';
   }
   function tick() {
     document.querySelectorAll('[data-time]').forEach(function (el) { el.textContent = rel(el.getAttribute('data-time')); });
@@ -352,6 +396,7 @@ const PAGE_JS = `
 `;
 
 async function statusPage(env: Env, manualResult?: PingResult): Promise<Response> {
+  await restoreStatus(env);
   const loadedUrls: URL[] = await configuredUrls(env);
   const displayedResult = manualResult ?? lastPing;
   const overall = displayedResult ? (displayedResult.success ? 'ok' : 'bad') : 'idle';
@@ -394,7 +439,7 @@ async function statusPage(env: Env, manualResult?: PingResult): Promise<Response
       <div class="bar" title="${pct}% success"><b style="width:${stats.totalPings ? pct : 0}%"></b></div>
       <div class="site-meta">
         <span>${stats.totalPings ? `${pct}% uptime · ${stats.successfulPings} ok · ${stats.failedPings} failed` : 'No pings yet'}</span>
-        <span>${stats.lastChecked ? `Checked <span data-time="${escapeHtml(stats.lastChecked)}">${escapeHtml(stats.lastChecked)}</span>` : 'Not checked'}</span>
+        <span>${stats.lastChecked ? `Last checked <span data-time="${escapeHtml(stats.lastChecked)}">${escapeHtml(stats.lastChecked)}</span>` : 'Not checked yet'}</span>
       </div>
       <div class="site-actions">
         <form method="post" action="/sites">
@@ -436,7 +481,7 @@ async function statusPage(env: Env, manualResult?: PingResult): Promise<Response
     </section>
 
     <section class="card">
-      <h2>Recent checks <small>last ${MAX_HISTORY} runs (since worker start)</small></h2>
+      <h2>Recent checks <small>last ${MAX_HISTORY} saved runs</small></h2>
       <div class="beat">${beatCells}</div>
     </section>
 
@@ -529,6 +574,7 @@ export default {
     }
 
     if (url.pathname === '/debug') {
+      await restoreStatus(env);
       const configured = await configuredUrls(env);
       return jsonResponse({
         service: 'KeepMeAlive',
