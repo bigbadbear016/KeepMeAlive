@@ -161,6 +161,27 @@ async function readStats(env: Env, target: string): Promise<TargetStats> {
   }
 }
 
+async function readSiteStats(env: Env, target: string): Promise<TargetStats> {
+  const stored = await readStats(env, target);
+  if (stored.totalPings > 0) return stored;
+
+  const matching = history.flatMap(result =>
+    result.targets.filter(targetResult => targetResult.target === target),
+  );
+  if (matching.length === 0) return stored;
+
+  return {
+    target,
+    totalPings: matching.length,
+    successfulPings: matching.filter(result => result.success).length,
+    failedPings: matching.filter(result => !result.success).length,
+    lastChecked: matching.length
+      ? history.find(result => result.targets.some(targetResult => targetResult.target === target))?.timestamp ?? null
+      : null,
+    status: matching[0].success ? 'stable' : 'down',
+  };
+}
+
 async function updateStats(env: Env, results: TargetResult[], timestamp: string): Promise<void> {
   if (!env.KEEPALIVE_DATA) return;
   await Promise.all(results.map(async result => {
@@ -397,6 +418,9 @@ const PAGE_JS = `
 
 async function statusPage(env: Env, manualResult?: PingResult): Promise<Response> {
   await restoreStatus(env);
+  if (!manualResult && !lastPing) {
+    await executePing(env);
+  }
   const loadedUrls: URL[] = await configuredUrls(env);
   const displayedResult = manualResult ?? lastPing;
   const overall = displayedResult ? (displayedResult.success ? 'ok' : 'bad') : 'idle';
@@ -404,7 +428,7 @@ async function statusPage(env: Env, manualResult?: PingResult): Promise<Response
     ? (displayedResult.success ? 'All systems operational' : 'Attention needed')
     : 'Awaiting first check';
 
-  const siteStats = await Promise.all(loadedUrls.map((url: URL) => readStats(env, url.href)));
+  const siteStats = await Promise.all(loadedUrls.map((url: URL) => readSiteStats(env, url.href)));
   const healthy = siteStats.filter(s => s.status === 'stable').length;
   const totalPings = siteStats.reduce((sum, s) => sum + s.totalPings, 0);
   const totalOk = siteStats.reduce((sum, s) => sum + s.successfulPings, 0);
