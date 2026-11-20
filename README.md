@@ -132,6 +132,14 @@ package.json    Local development commands
   when Cloudflare replaces that instance.
 - Do not put credentials or private tokens in the target URL.
 
+## Credits
+
+KeepMeAlive is created and maintained by
+[bigbadbear016](https://github.com/bigbadbear016).
+
+If this project helps you, please [star the official KeepMeAlive repository](https://github.com/bigbadbear016/KeepMeAlive)
+and visit the author's [GitHub profile](https://github.com/bigbadbear016).
+
 ## License
 
 MIT
