@@ -1,0 +1,15 @@
+name = "keepmealive"
+main = "src/worker.ts"
+compatibility_date = "2025-06-01"
+
+[triggers]
+# Run often enough to keep most inactivity-based hosting plans warm.
+crons = ["*/10 * * * *"]
+
+[vars]
+TARGET_URL = "https://your-site.example.com"
+HEALTH_ENDPOINT = "/"
+FALLBACK_ENDPOINT = "/healthz"
+TIMEOUT_MS = "12000"
+RETRY_ATTEMPTS = "2"
+ENABLE_FALLBACK = "true"
