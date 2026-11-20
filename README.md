@@ -32,15 +32,16 @@ npx wrangler login
 
 ### 2. Choose the website
 
-Enter any public website or API URL in `TARGET_URL` in `wrangler.toml`, or use the **Deploy to Cloudflare
+Enter one or more public website or API URLs in `TARGET_URL` in `wrangler.toml`, separated by a comma, pipe (`|`), or line break. Or use the **Deploy to Cloudflare
 Workers** button above and enter the value in Cloudflare's setup form:
 
 ```toml
-TARGET_URL = "https://example.com"
+TARGET_URL = "https://example.com, https://api.example.com"
 ```
 
 The same setup form lets you adjust the health path, fallback path, timeout,
-retry count, and fallback switch.
+retry count, and fallback switch. All targets are checked concurrently; the
+run is successful only when every target succeeds.
 
 ### 3. Deploy
 
@@ -85,7 +86,7 @@ Cloudflare deployment form.
 
 | Variable | Example | Meaning |
 | --- | --- | --- |
-| `TARGET_URL` | `https://example.com` | Website or API base URL |
+| `TARGET_URL` | `https://example.com` | One or more website/API URLs separated by `,`, `|`, or new lines |
 | `HEALTH_ENDPOINT` | `/` | First path to request |
 | `FALLBACK_ENDPOINT` | `/healthz` | Optional path used after a failed first check |
 | `TIMEOUT_MS` | `12000` | Maximum wait for each request |
@@ -104,7 +105,7 @@ FALLBACK_ENDPOINT = "/"
 Create a `.dev.vars` file (ignored by Git):
 
 ```dotenv
-TARGET_URL=https://example.com
+TARGET_URL=https://example.com|https://api.example.com
 ```
 
 Start the local Worker:

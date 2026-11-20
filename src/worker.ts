@@ -14,6 +14,16 @@ interface PingResult {
   status: number | null;
   endpoint: string;
   fallback: boolean;
+  targets: TargetResult[];
+  error?: string;
+}
+
+interface TargetResult {
+  target: string;
+  success: boolean;
+  status: number | null;
+  endpoint: string;
+  fallback: boolean;
   error?: string;
 }
 
@@ -31,10 +41,7 @@ function jsonResponse(data: unknown, status = 200): Response {
   });
 }
 
-function targetUrl(env: Env): URL | null {
-  const raw = env.TARGET_URL?.trim();
-  if (!raw) return null;
-
+function parseTarget(raw: string): URL | null {
   try {
     const url = new URL(raw);
     if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
@@ -48,6 +55,19 @@ function targetUrl(env: Env): URL | null {
   } catch {
     return null;
   }
+}
+
+function targetUrls(env: Env): URL[] {
+  const raw = env.TARGET_URL?.trim() ?? '';
+  const unique = new Set<string>();
+  return raw
+    .split(/[|,\r\n]+/)
+    .map(value => parseTarget(value.trim()))
+    .filter((url): url is URL => {
+      if (!url || unique.has(url.href)) return false;
+      unique.add(url.href);
+      return true;
+    });
 }
 
 function endpointUrl(base: URL, endpoint: string): string {
@@ -85,12 +105,12 @@ async function requestEndpoint(
 
 async function executePing(env: Env): Promise<PingResult> {
   const started = Date.now();
-  const base = targetUrl(env);
+  const targets = targetUrls(env);
   const timeoutMs = Math.max(1000, Number(env.TIMEOUT_MS) || 12_000);
   const attempts = Math.max(1, Number(env.RETRY_ATTEMPTS) || 2);
   const enableFallback = env.ENABLE_FALLBACK !== 'false';
 
-  if (!base) {
+  if (targets.length === 0) {
     return record({
       success: false,
       timestamp: new Date().toISOString(),
@@ -98,36 +118,49 @@ async function executePing(env: Env): Promise<PingResult> {
       status: null,
       endpoint: '',
       fallback: false,
-      error: 'TARGET_URL is missing or invalid',
+      targets: [],
+      error: 'TARGET_URL must contain at least one valid HTTP or HTTPS URL',
     });
   }
 
   const primary = env.HEALTH_ENDPOINT || '/';
   const fallback = env.FALLBACK_ENDPOINT || '/';
-  const primaryUrl = endpointUrl(base, primary);
-  const primaryResult = await requestEndpoint(primaryUrl, timeoutMs, attempts);
+  const results = await Promise.all(targets.map(async base => {
+    const primaryResult = await requestEndpoint(endpointUrl(base, primary), timeoutMs, attempts);
+    if (primaryResult.ok || primary === fallback || !enableFallback) {
+      return {
+        target: base.href,
+        success: primaryResult.ok,
+        status: primaryResult.status || null,
+        endpoint: primary,
+        fallback: false,
+        ...(primaryResult.error ? { error: primaryResult.error } : {}),
+      };
+    }
 
-  if (primaryResult.ok || primary === fallback || !enableFallback) {
-    return record({
-      success: primaryResult.ok,
-      timestamp: new Date().toISOString(),
-      durationMs: Date.now() - started,
-      status: primaryResult.status || null,
-      endpoint: primary,
-      fallback: false,
-      ...(primaryResult.error ? { error: primaryResult.error } : {}),
-    });
-  }
+    const fallbackResult = await requestEndpoint(endpointUrl(base, fallback), timeoutMs, attempts);
+    return {
+      target: base.href,
+      success: fallbackResult.ok,
+      status: fallbackResult.status || null,
+      endpoint: fallback,
+      fallback: true,
+      ...(fallbackResult.error ? { error: fallbackResult.error } : {}),
+    };
+  }));
 
-  const fallbackResult = await requestEndpoint(endpointUrl(base, fallback), timeoutMs, attempts);
+  const first = results[0];
   return record({
-    success: fallbackResult.ok,
+    success: results.every(result => result.success),
     timestamp: new Date().toISOString(),
     durationMs: Date.now() - started,
-    status: fallbackResult.status || null,
-    endpoint: fallback,
-    fallback: true,
-    ...(fallbackResult.error ? { error: fallbackResult.error } : {}),
+    status: first.status,
+    endpoint: first.endpoint,
+    fallback: first.fallback,
+    targets: results,
+    ...(results.find(result => result.error)?.error
+      ? { error: 'One or more targets could not be reached' }
+      : {}),
   });
 }
 
@@ -139,11 +172,14 @@ function record(result: PingResult): PingResult {
 }
 
 function statusPage(env: Env): Response {
-  const configured = Boolean(env.TARGET_URL);
+  const configured = targetUrls(env).length > 0;
   const status = lastPing?.success ? 'Stable' : lastPing ? 'Attention needed' : 'Awaiting first check';
   const color = lastPing?.success ? '#4ade80' : lastPing ? '#f87171' : '#94a3b8';
+  const targetSummary = lastPing?.targets.length
+    ? `${lastPing.targets.filter(target => target.success).length}/${lastPing.targets.length} targets responding`
+    : 'No checks have run yet';
   const latest = lastPing
-    ? `${lastPing.timestamp} · ${lastPing.durationMs} ms · ${lastPing.endpoint}`
+    ? `${targetSummary} · ${lastPing.durationMs} ms`
     : 'The Worker has not contacted the service yet.';
 
   const html = `<!doctype html>
@@ -169,7 +205,7 @@ function statusPage(env: Env): Response {
     <p>A lightweight heartbeat for one configured web service.</p>
     <div class="status">${status}</div>
     <p class="meta">${latest}</p>
-    <p>${configured ? 'Monitoring is configured and ready.' : 'Add TARGET_URL to start monitoring.'}</p>
+    <p>${configured ? `${targetUrls(env).length} target${targetUrls(env).length === 1 ? '' : 's'} configured.` : 'Add TARGET_URL to start monitoring.'}</p>
     <form method="post" action="/ping"><button type="submit">Run a check</button></form>
     <p class="meta"><a href="/debug">Open diagnostics</a></p>
   </main>
@@ -195,6 +231,7 @@ export default {
       return jsonResponse({
         service: 'KeepMeAlive',
         targetConfigured: Boolean(env.TARGET_URL),
+        targetCount: targetUrls(env).length,
         healthEndpoint: env.HEALTH_ENDPOINT || '/',
         fallbackEndpoint: env.FALLBACK_ENDPOINT || '/',
         timeoutMs: Math.max(1000, Number(env.TIMEOUT_MS) || 12_000),
